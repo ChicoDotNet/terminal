@@ -1,0 +1,131 @@
+name: R09 Product Build
+
+on:
+  push:
+    branches:
+      - "rust/r09-product-integration"
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "rust/terminal-parser/**"
+      - "rust/terminal-parser-ffi/**"
+      - "rust/terminal-app/**"
+      - "rust/terminal-app-ffi/**"
+      - "src/terminal/parser/**"
+      - "src/cascadia/fzf/**"
+      - "src/cascadia/TerminalApp/**"
+      - "src/cascadia/TerminalSettingsEditor/**"
+      - "Directory.Build.targets"
+      - "tools/rust/Invoke-R09ProductBuild.ps1"
+      - "tools/rust/R09ControlCharacterAbiProbe.cpp"
+      - "tools/rust/Test-R09ParserOwnership.ps1"
+      - "tools/rust/Test-R09OutputOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiEraseCharactersOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiScrollOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiPageOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiPagePositionOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiTabOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiTerminalParametersOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiDeviceAttributesOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiCursorRestoreOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiSoftResetOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiDisplayedExtentOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiCursorStyleOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiRequestModeOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiDeviceStatusReportOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiModeOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiEraseOwnership.ps1"
+      - "tools/rust/Test-R09OutputCsiTabControlOwnership.ps1"
+      - "tools/rust/Test-R09FzfOwnership.ps1"
+      - ".github/workflows/r09-product-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r09-product-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cascadia-package:
+    name: CascadiaPackage x64 Debug
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Rust toolchain
+        run: rustup show
+      - name: Validate parser ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09ParserOwnership.ps1
+      - name: Validate Output ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputOwnership.ps1
+      - name: Validate CSI erase characters ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiEraseCharactersOwnership.ps1
+      - name: Validate CSI scrolling ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiScrollOwnership.ps1
+      - name: Validate CSI page navigation ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiPageOwnership.ps1
+      - name: Validate CSI page positioning ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiPagePositionOwnership.ps1
+      - name: Validate CSI tab movement ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiTabOwnership.ps1
+      - name: Validate CSI terminal parameters ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiTerminalParametersOwnership.ps1
+      - name: Validate CSI device attributes ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiDeviceAttributesOwnership.ps1
+      - name: Validate CSI cursor restore ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiCursorRestoreOwnership.ps1
+      - name: Validate CSI soft reset ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiSoftResetOwnership.ps1
+      - name: Validate CSI displayed extent ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiDisplayedExtentOwnership.ps1
+      - name: Validate CSI cursor style ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiCursorStyleOwnership.ps1
+      - name: Validate CSI request mode ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiRequestModeOwnership.ps1
+      - name: Validate CSI device status report ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiDeviceStatusReportOwnership.ps1
+      - name: Validate CSI mode ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiModeOwnership.ps1
+      - name: Validate CSI erase ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiEraseOwnership.ps1
+      - name: Validate CSI tab control ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09OutputCsiTabControlOwnership.ps1
+      - name: Validate FZF ownership
+        shell: pwsh
+        run: ./tools/rust/Test-R09FzfOwnership.ps1
+      - name: Canonical product build
+        shell: pwsh
+        run: ./tools/rust/Invoke-R09ProductBuild.ps1 -Configuration Debug -Platform x64 -SkipSubmodules
+      - name: Preserve product build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r09-product-build-diagnostics
+          path: |
+            artifacts/r09-product-build.log
+            artifacts/r09-product-build.binlog
+          if-no-files-found: warn
+          retention-days: 7

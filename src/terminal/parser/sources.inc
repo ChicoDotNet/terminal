@@ -34,7 +34,6 @@ SOURCES = \
     ..\InputStateMachineEngine.cpp \
     ..\OutputStateMachineEngine.cpp \
     ..\tracing.cpp \
-    ..\base64.cpp \
 
 INCLUDES = \
     $(INCLUDES); \

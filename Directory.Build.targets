@@ -8,4 +8,40 @@
     <Import Project="$(MSBuildCachePackageRoot)\build\$(MSBuildCachePackageName).targets" />
     <Import Project="$(MSBuildCacheSharedCompilationPackageRoot)\build\Microsoft.MSBuildCache.SharedCompilation.targets" />
   </ImportGroup>
+
+  <!-- R09 product integration: keep native TerminalApp/Settings UI ownership while
+       linking deterministic FZF behavior from the Rust static library. -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'TerminalAppLib' Or '$(MSBuildProjectName)' == 'Microsoft.Terminal.Settings.Editor'">
+    <_RustTerminalAppTargetTriple Condition="'$(Platform)' == 'x64'">x86_64-pc-windows-msvc</_RustTerminalAppTargetTriple>
+    <_RustTerminalAppTargetTriple Condition="'$(Platform)' == 'Win32'">i686-pc-windows-msvc</_RustTerminalAppTargetTriple>
+    <_RustTerminalAppTargetTriple Condition="'$(Platform)' == 'ARM64'">aarch64-pc-windows-msvc</_RustTerminalAppTargetTriple>
+    <_RustTerminalAppCargoProfile Condition="'$(Configuration)' == 'Debug'">debug</_RustTerminalAppCargoProfile>
+    <_RustTerminalAppCargoProfile Condition="'$(Configuration)' != 'Debug'">release</_RustTerminalAppCargoProfile>
+    <_RustTerminalAppCargoReleaseArg Condition="'$(Configuration)' != 'Debug'">--release</_RustTerminalAppCargoReleaseArg>
+    <_RustTerminalAppFfiLib>$(SolutionDir)artifacts\cargo-target\$(_RustTerminalAppTargetTriple)\$(_RustTerminalAppCargoProfile)\terminal_app_ffi.lib</_RustTerminalAppFfiLib>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'TerminalAppLib' Or '$(MSBuildProjectName)' == 'Microsoft.Terminal.Settings.Editor'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)rust\terminal-app-ffi\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'TerminalAppLib'">
+    <Lib>
+      <AdditionalDependencies>$(_RustTerminalAppFfiLib);%(AdditionalDependencies)</AdditionalDependencies>
+    </Lib>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'Microsoft.Terminal.Settings.Editor'">
+    <Link>
+      <AdditionalDependencies>$(_RustTerminalAppFfiLib);%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Target Name="BuildRustTerminalAppFfi" BeforeTargets="ClCompile" Condition="'$(MSBuildProjectName)' == 'TerminalAppLib' Or '$(MSBuildProjectName)' == 'Microsoft.Terminal.Settings.Editor'">
+    <Error Condition="'$(_RustTerminalAppTargetTriple)' == ''" Text="R09 TerminalApp Rust integration does not support MSBuild platform '$(Platform)'." />
+    <Exec WorkingDirectory="$(SolutionDir)" Command="rustup target add $(_RustTerminalAppTargetTriple)" />
+    <Exec WorkingDirectory="$(SolutionDir)" Command="cargo build --locked -p terminal-app-ffi --target $(_RustTerminalAppTargetTriple) $(_RustTerminalAppCargoReleaseArg)" />
+  </Target>
 </Project>

@@ -31,6 +31,13 @@ name = "terminal-app"
 version = "0.0.0"
 
 [[package]]
+name = "terminal-app-ffi"
+version = "0.0.0"
+dependencies = [
+ "terminal-app",
+]
+
+[[package]]
 name = "terminal-buffer"
 version = "0.0.0"
 dependencies = [

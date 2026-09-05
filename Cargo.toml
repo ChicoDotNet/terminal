@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "rust/terminal-adapter",
     "rust/terminal-app",
+    "rust/terminal-app-ffi",
     "rust/terminal-buffer",
     "rust/terminal-core",
     "rust/terminal-foundation",
@@ -17,7 +18,7 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/ChicoDotNet/terminal"
+repository = "https://github.com/ChicoDotNet/WindowsRustTerminal"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

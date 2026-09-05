@@ -60,17 +60,19 @@ namespace winrt::TerminalApp::implementation
         std::vector<winrt::TerminalApp::HighlightedRun> segments;
         int32_t weight = 0;
 
-        if (pattern && !pattern->terms.empty())
+        if (pattern)
         {
-            if (auto match = fzf::matcher::Match(haystack, *pattern.get()); match)
+            const auto match = fzf::matcher::Match(haystack, *pattern);
+            if (!match)
             {
-                auto& matchResult = *match;
-                weight = matchResult.Score;
-                segments.resize(matchResult.Runs.size());
-                std::transform(matchResult.Runs.begin(), matchResult.Runs.end(), segments.begin(), [](auto&& run) -> winrt::TerminalApp::HighlightedRun {
-                    return { run.Start, run.End };
-                });
+                return { {}, 0 };
             }
+
+            weight = match->Score;
+            segments.resize(match->Runs.size());
+            std::transform(match->Runs.begin(), match->Runs.end(), segments.begin(), [](const auto& run) -> winrt::TerminalApp::HighlightedRun {
+                return { run.Start, run.End };
+            });
         }
         return { std::move(segments), weight };
     }

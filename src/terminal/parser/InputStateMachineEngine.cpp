@@ -5,6 +5,7 @@
 
 #include "stateMachine.hpp"
 #include "InputStateMachineEngine.hpp"
+#include "terminal_parser_ffi.h"
 
 #include <til/atomic.h>
 
@@ -12,82 +13,6 @@
 #include "../../interactivity/inc/VtApiRedirection.hpp"
 
 using namespace Microsoft::Console::VirtualTerminal;
-
-struct CsiToVkey
-{
-    CsiActionCodes action;
-    short vkey;
-};
-
-static constexpr std::array<CsiToVkey, 10> s_csiMap = {
-    CsiToVkey{ CsiActionCodes::ArrowUp, VK_UP },
-    CsiToVkey{ CsiActionCodes::ArrowDown, VK_DOWN },
-    CsiToVkey{ CsiActionCodes::ArrowRight, VK_RIGHT },
-    CsiToVkey{ CsiActionCodes::ArrowLeft, VK_LEFT },
-    CsiToVkey{ CsiActionCodes::Home, VK_HOME },
-    CsiToVkey{ CsiActionCodes::End, VK_END },
-    CsiToVkey{ CsiActionCodes::CSI_F1, VK_F1 },
-    CsiToVkey{ CsiActionCodes::CSI_F2, VK_F2 },
-    CsiToVkey{ CsiActionCodes::CSI_F3, VK_F3 },
-    CsiToVkey{ CsiActionCodes::CSI_F4, VK_F4 }
-};
-
-static bool operator==(const CsiToVkey& pair, const VTID id) noexcept
-{
-    return pair.action == id;
-}
-
-struct GenericToVkey
-{
-    GenericKeyIdentifiers identifier;
-    short vkey;
-};
-
-static constexpr std::array<GenericToVkey, 14> s_genericMap = {
-    GenericToVkey{ GenericKeyIdentifiers::GenericHome, VK_HOME },
-    GenericToVkey{ GenericKeyIdentifiers::Insert, VK_INSERT },
-    GenericToVkey{ GenericKeyIdentifiers::Delete, VK_DELETE },
-    GenericToVkey{ GenericKeyIdentifiers::GenericEnd, VK_END },
-    GenericToVkey{ GenericKeyIdentifiers::Prior, VK_PRIOR },
-    GenericToVkey{ GenericKeyIdentifiers::Next, VK_NEXT },
-    GenericToVkey{ GenericKeyIdentifiers::F5, VK_F5 },
-    GenericToVkey{ GenericKeyIdentifiers::F6, VK_F6 },
-    GenericToVkey{ GenericKeyIdentifiers::F7, VK_F7 },
-    GenericToVkey{ GenericKeyIdentifiers::F8, VK_F8 },
-    GenericToVkey{ GenericKeyIdentifiers::F9, VK_F9 },
-    GenericToVkey{ GenericKeyIdentifiers::F10, VK_F10 },
-    GenericToVkey{ GenericKeyIdentifiers::F11, VK_F11 },
-    GenericToVkey{ GenericKeyIdentifiers::F12, VK_F12 },
-};
-
-static bool operator==(const GenericToVkey& pair, const GenericKeyIdentifiers identifier) noexcept
-{
-    return pair.identifier == identifier;
-}
-
-struct Ss3ToVkey
-{
-    Ss3ActionCodes action;
-    short vkey;
-};
-
-static constexpr std::array<Ss3ToVkey, 10> s_ss3Map = {
-    Ss3ToVkey{ Ss3ActionCodes::ArrowUp, VK_UP },
-    Ss3ToVkey{ Ss3ActionCodes::ArrowDown, VK_DOWN },
-    Ss3ToVkey{ Ss3ActionCodes::ArrowRight, VK_RIGHT },
-    Ss3ToVkey{ Ss3ActionCodes::ArrowLeft, VK_LEFT },
-    Ss3ToVkey{ Ss3ActionCodes::End, VK_END },
-    Ss3ToVkey{ Ss3ActionCodes::Home, VK_HOME },
-    Ss3ToVkey{ Ss3ActionCodes::SS3_F1, VK_F1 },
-    Ss3ToVkey{ Ss3ActionCodes::SS3_F2, VK_F2 },
-    Ss3ToVkey{ Ss3ActionCodes::SS3_F3, VK_F3 },
-    Ss3ToVkey{ Ss3ActionCodes::SS3_F4, VK_F4 },
-};
-
-static bool operator==(const Ss3ToVkey& pair, const Ss3ActionCodes code) noexcept
-{
-    return pair.action == code;
-}
 
 InputStateMachineEngine::InputStateMachineEngine(std::unique_ptr<IInteractDispatch> pDispatch) :
     _pDispatch(std::move(pDispatch)),
@@ -110,7 +35,7 @@ til::enumset<DeviceAttribute, uint64_t> InputStateMachineEngine::WaitUntilDA1(DW
     // but I suspect infinite spurious wake-ups are a theoretical problem.
     for (;;)
     {
-        val = _deviceAttributes.load(std::memory_order::relaxed);
+        val = _deviceAttributes.load(std::memory_order_relaxed);
         if (val)
         {
             break;
@@ -153,64 +78,50 @@ bool InputStateMachineEngine::ActionExecute(const wchar_t wch)
 // Routine Description:
 // - Writes a control character into the buffer. Think characters like tab, backspace, etc.
 // Arguments:
-// - wch - The character to write
+// - wch - the character to write
 // - writeAlt - Pass in the alt-state information here as it's not embedded
 // Return Value:
 // - True if successfully generated and written. False otherwise.
 bool InputStateMachineEngine::_DoControlCharacter(const wchar_t wch, const bool writeAlt)
 {
-    if (wch == UNICODE_ETX && !writeAlt)
+    terminal_parser_ffi_control_character_plan plan{};
+    const auto status = terminal_parser_ffi_input_control_character_plan(
+        gsl::narrow_cast<uint16_t>(wch),
+        writeAlt ? 1u : 0u,
+        &plan);
+    THROW_HR_IF(E_UNEXPECTED, status != TERMINAL_PARSER_FFI_OK);
+
+    switch (plan.kind)
     {
-        // This is Ctrl+C, which is handled specially by the host.
-        static constexpr auto keyDown = SynthesizeKeyEvent(true, 1, L'C', 0, UNICODE_ETX, LEFT_CTRL_PRESSED);
-        static constexpr auto keyUp = SynthesizeKeyEvent(false, 1, L'C', 0, UNICODE_ETX, LEFT_CTRL_PRESSED);
+    case TERMINAL_PARSER_FFI_CONTROL_CHARACTER_CTRL_C:
+    {
+        const auto virtualKey = gsl::narrow_cast<short>(plan.forced_virtual_key);
+        const auto character = static_cast<wchar_t>(plan.character);
+        const auto modifierState = plan.write_ctrl != 0 ? LEFT_CTRL_PRESSED : 0;
+        const auto keyDown = SynthesizeKeyEvent(true, 1, virtualKey, 0, character, modifierState);
+        const auto keyUp = SynthesizeKeyEvent(false, 1, virtualKey, 0, character, modifierState);
         _pDispatch->WriteCtrlKey(keyDown);
         _pDispatch->WriteCtrlKey(keyUp);
+        break;
     }
-    else if (wch >= '\x0' && wch < '\x20')
+    case TERMINAL_PARSER_FFI_CONTROL_CHARACTER_MAPPED_C0:
     {
-        // This is a C0 Control Character.
-        // This should be translated as Ctrl+(wch+x40)
-        auto actualChar = wch;
-        auto writeCtrl = true;
-        auto success = false;
-
-        short vkey = 0;
+        const auto actualChar = static_cast<wchar_t>(plan.character);
+        short vkey = gsl::narrow_cast<short>(plan.forced_virtual_key);
         DWORD modifierState = 0;
-
-        switch (wch)
+        auto success = plan.forced_virtual_key != 0;
+        if (!success)
         {
-        case L'\b':
-            // Process Ctrl+Bksp to delete whole words
-            actualChar = '\x7f';
             success = _GenerateKeyFromChar(actualChar, vkey, modifierState);
+        }
+        if (plan.clear_layout_modifiers != 0)
+        {
             modifierState = 0;
-            break;
-        case L'\r':
-            writeCtrl = false;
-            success = _GenerateKeyFromChar(wch, vkey, modifierState);
-            modifierState = 0;
-            break;
-        case L'\x1b':
-            // Translate escape as the ESC key, NOT C-[.
-            // This means that C-[ won't insert ^[ into the buffer anymore,
-            //      which isn't the worst tradeoff.
-            vkey = VK_ESCAPE;
-            writeCtrl = false;
-            success = true;
-            break;
-        case L'\t':
-            writeCtrl = false;
-            success = _GenerateKeyFromChar(actualChar, vkey, modifierState);
-            break;
-        default:
-            success = _GenerateKeyFromChar(actualChar, vkey, modifierState);
-            break;
         }
 
         if (success)
         {
-            if (writeCtrl)
+            if (plan.write_ctrl != 0)
             {
                 WI_SetFlag(modifierState, LEFT_CTRL_PRESSED);
             }
@@ -221,22 +132,21 @@ bool InputStateMachineEngine::_DoControlCharacter(const wchar_t wch, const bool 
 
             _WriteSingleKey(actualChar, vkey, modifierState);
         }
+        break;
     }
-    else if (wch == '\x7f')
-    {
-        // Note:
-        //  The windows telnet expects to send x7f as DELETE, not backspace.
-        //      However, the windows telnetd also wouldn't let you move the
-        //      cursor back into the input line, so it wasn't possible to
-        //      "delete" any input at all, only backspace.
-        //  Because of this, we're treating x7f as backspace, like most
-        //      terminals do.
-        _WriteSingleKey('\x8', VK_BACK, writeAlt ? LEFT_ALT_PRESSED : 0);
+    case TERMINAL_PARSER_FFI_CONTROL_CHARACTER_DELETE_AS_BACKSPACE:
+        _WriteSingleKey(
+            static_cast<wchar_t>(plan.character),
+            gsl::narrow_cast<short>(plan.forced_virtual_key),
+            writeAlt ? LEFT_ALT_PRESSED : 0);
+        break;
+    case TERMINAL_PARSER_FFI_CONTROL_CHARACTER_PRINT:
+        ActionPrint(static_cast<wchar_t>(plan.character));
+        break;
+    default:
+        THROW_HR(E_UNEXPECTED);
     }
-    else
-    {
-        ActionPrint(wch);
-    }
+
     return true;
 }
 
@@ -380,7 +290,7 @@ bool InputStateMachineEngine::ActionVt52EscDispatch(const VTID /*id*/, const VTP
 //      a control sequence. These sequences perform various API-type commands
 //      that can include many parameters.
 // Arguments:
-// - id - Identifier of the control sequence to dispatch.
+// - id - Identifier of the escape sequence to dispatch.
 // - parameters - set of numeric parameters collected while parsing the sequence.
 // Return Value:
 // - true iff we successfully dispatched the sequence.
@@ -538,7 +448,7 @@ bool InputStateMachineEngine::ActionCsiDispatch(const VTID id, const VTParameter
 //      a control sequence. Returns the handler function that is to be used to
 //      process the subsequent data string characters in the sequence.
 // Arguments:
-// - id - Identifier of the control sequence to dispatch.
+// - id - Identifier of the escape sequence to dispatch.
 // - parameters - set of numeric parameters collected while parsing the sequence.
 // Return Value:
 // - the data string handler function or nullptr if the sequence is not supported
@@ -580,7 +490,7 @@ bool InputStateMachineEngine::ActionSs3Dispatch(const wchar_t wch, const VTParam
 
 // Method Description:
 // - Triggers the OscDispatch action to indicate that the listener should handle a control sequence.
-//   These sequences perform various API-type commands that can include many parameters.
+//   These sequences perform various API-type commands.
 // Arguments:
 // - parameter - identifier of the OSC action to perform
 // - string - OSC string we've collected. NOT null terminated.
@@ -773,20 +683,9 @@ void InputStateMachineEngine::_WriteMouseEvent(const til::point uiPos, const DWO
 // - the INPUT_RECORD compatible modifier state.
 DWORD InputStateMachineEngine::_GetCursorKeysModifierState(const VTParameters parameters, const VTID id) noexcept
 {
-    auto modifiers = _GetModifier(parameters.at(1));
-
-    // Enhanced Keys (from https://docs.microsoft.com/en-us/windows/console/key-event-record-str):
-    //   Enhanced keys for the IBM 101- and 102-key keyboards are the INS, DEL,
-    //   HOME, END, PAGE UP, PAGE DOWN, and direction keys in the clusters to the left
-    //   of the keypad; and the divide (/) and ENTER keys in the keypad.
-    // This snippet detects the direction keys + HOME + END
-    // actionCode should be one of the above, so just make sure it's not a CSI_F# code
-    if (id < CsiActionCodes::CSI_F1 || id > CsiActionCodes::CSI_F4)
-    {
-        WI_SetFlag(modifiers, ENHANCED_KEY);
-    }
-
-    return modifiers;
+    return terminal_parser_ffi_input_cursor_modifier_state(
+        gsl::narrow_cast<uint16_t>(id),
+        gsl::narrow_cast<uint32_t>(parameters.at(1)));
 }
 
 // Method Description:
@@ -798,20 +697,9 @@ DWORD InputStateMachineEngine::_GetCursorKeysModifierState(const VTParameters pa
 // - the INPUT_RECORD compatible modifier state.
 DWORD InputStateMachineEngine::_GetGenericKeysModifierState(const VTParameters parameters) noexcept
 {
-    auto modifiers = _GetModifier(parameters.at(1));
-
-    // Enhanced Keys (from https://docs.microsoft.com/en-us/windows/console/key-event-record-str):
-    //   Enhanced keys for the IBM 101- and 102-key keyboards are the INS, DEL,
-    //   HOME, END, PAGE UP, PAGE DOWN, and direction keys in the clusters to the left
-    //   of the keypad; and the divide (/) and ENTER keys in the keypad.
-    // This snippet detects the non-direction keys
-    const GenericKeyIdentifiers identifier = parameters.at(0);
-    if (identifier <= GenericKeyIdentifiers::Next)
-    {
-        modifiers = WI_SetFlag(modifiers, ENHANCED_KEY);
-    }
-
-    return modifiers;
+    return terminal_parser_ffi_input_generic_modifier_state(
+        static_cast<int32_t>(parameters.at(0)),
+        gsl::narrow_cast<uint32_t>(parameters.at(1)));
 }
 
 // Method Description:
@@ -823,18 +711,7 @@ DWORD InputStateMachineEngine::_GetGenericKeysModifierState(const VTParameters p
 // - the INPUT_RECORD compatible modifier state.
 DWORD InputStateMachineEngine::_GetSGRMouseModifierState(const size_t modifierParam) noexcept
 {
-    DWORD modifiers = 0;
-    // The first parameter of mouse events is encoded as the following two bytes:
-    // BBDM'MMBB
-    // Where each of the bits mean the following
-    //   BB__'__BB - which button was pressed/released
-    //   MMM - Control, Alt, Shift state (respectively)
-    //   D - flag signifying a drag event
-    // This retrieves the modifier state from bits [5..3] ('M' above)
-    WI_SetFlagIf(modifiers, SHIFT_PRESSED, WI_IsFlagSet(modifierParam, CsiMouseModifierCodes::Shift));
-    WI_SetFlagIf(modifiers, LEFT_ALT_PRESSED, WI_IsFlagSet(modifierParam, CsiMouseModifierCodes::Meta));
-    WI_SetFlagIf(modifiers, LEFT_CTRL_PRESSED, WI_IsFlagSet(modifierParam, CsiMouseModifierCodes::Ctrl));
-    return modifiers;
+    return terminal_parser_ffi_input_sgr_mouse_modifier_state(gsl::narrow_cast<uint32_t>(modifierParam));
 }
 
 // Method Description:
@@ -845,19 +722,13 @@ DWORD InputStateMachineEngine::_GetSGRMouseModifierState(const size_t modifierPa
 // - The equivalent INPUT_RECORD modifier value.
 DWORD InputStateMachineEngine::_GetModifier(const size_t modifierParam) noexcept
 {
-    // VT Modifiers are 1+(modifier flags)
-    const auto vtParam = modifierParam - 1;
-    DWORD modifierState = 0;
-    WI_SetFlagIf(modifierState, SHIFT_PRESSED, WI_IsFlagSet(vtParam, VT_SHIFT));
-    WI_SetFlagIf(modifierState, LEFT_ALT_PRESSED, WI_IsFlagSet(vtParam, VT_ALT));
-    WI_SetFlagIf(modifierState, LEFT_CTRL_PRESSED, WI_IsFlagSet(vtParam, VT_CTRL));
-    return modifierState;
+    return terminal_parser_ffi_input_vt_modifier_state(gsl::narrow_cast<uint32_t>(modifierParam));
 }
 
 // Method Description:
 // - Synthesize the button state for the Mouse Input Record from an SGR VT Sequence
-// - Here, we refer to and maintain the global state of our mouse.
-// - Mouse wheel events are added at the end to keep them out of the global state
+// - Rust owns deterministic SGR decoding and persistent button state.
+// - Native code retains only double-click tracking, which depends on time and position.
 // Arguments:
 // - id: the sequence identifier representing whether the button was pressed or released
 // - sgrEncoding: the first parameter, encoding the button and drag state
@@ -871,131 +742,49 @@ bool InputStateMachineEngine::_UpdateSGRMouseButtonState(const VTID id,
                                                          DWORD& eventFlags,
                                                          const til::point uiPos)
 {
-    // Starting with the state from the last mouse event we received
-    buttonState = _mouseButtonState;
-    eventFlags = 0;
-
-    // The first parameter of mouse events is encoded as the following two bytes:
-    // BBDM'MMBB
-    // Where each of the bits mean the following
-    //   BB__'__BB - which button was pressed/released
-    //   MMM - Control, Alt, Shift state (respectively)
-    //   D - flag signifying a drag event
-
-    // This retrieves the 2 MSBs and concatenates them to the 2 LSBs to create BBBB in binary
-    // This represents which button had a change in state
-    const auto buttonID = (sgrEncoding & 0x3) | ((sgrEncoding & 0xC0) >> 4);
-    const auto currentTime = std::chrono::steady_clock::now();
-    // Step 1: Translate which button was affected
-    // NOTE: if scrolled, having buttonFlag = 0 means
-    //       we don't actually update the buttonState
-    DWORD buttonFlag = 0;
-    switch (buttonID)
+    const auto buttonDown = id == CsiActionCodes::MouseDown;
+    if (!buttonDown && id != CsiActionCodes::MouseUp)
     {
-    case CsiMouseButtonCodes::Left:
-        buttonFlag = FROM_LEFT_1ST_BUTTON_PRESSED;
-        break;
-    case CsiMouseButtonCodes::Right:
-        buttonFlag = RIGHTMOST_BUTTON_PRESSED;
-        break;
-    case CsiMouseButtonCodes::Middle:
-        buttonFlag = FROM_LEFT_2ND_BUTTON_PRESSED;
-        break;
-    case CsiMouseButtonCodes::ScrollBack:
-    {
-        // set high word to proper scroll direction
-        // scroll intensity is assumed to be constant value
-        buttonState |= SCROLL_DELTA_BACKWARD;
-        eventFlags |= MOUSE_WHEELED;
-        break;
-    }
-    case CsiMouseButtonCodes::ScrollForward:
-    {
-        // set high word to proper scroll direction
-        // scroll intensity is assumed to be constant value
-        buttonState |= SCROLL_DELTA_FORWARD;
-        eventFlags |= MOUSE_WHEELED;
-        break;
-    }
-    case CsiMouseButtonCodes::ScrollLeft:
-    {
-        // set high word to proper scroll direction
-        // scroll intensity is assumed to be constant value
-        buttonState |= SCROLL_DELTA_BACKWARD;
-        eventFlags |= MOUSE_HWHEELED;
-        break;
-    }
-    case CsiMouseButtonCodes::ScrollRight:
-    {
-        // set high word to proper scroll direction
-        // scroll intensity is assumed to be constant value
-        buttonState |= SCROLL_DELTA_FORWARD;
-        eventFlags |= MOUSE_HWHEELED;
-        break;
-    }
-    case CsiMouseButtonCodes::Released:
-        // hover event, we still want to send these but we don't
-        // need to do anything special here, so just break
-        break;
-    default:
-        // no detectable buttonID, so we can't update the state
         return false;
     }
 
-    // Step 2: Decide whether to set or clear that button's bit
-    // NOTE: WI_SetFlag/WI_ClearFlag can't be used here because buttonFlag would have to be a compile-time constant
-    switch (id)
+    terminal_parser_ffi_sgr_mouse_plan plan{};
+    const auto status = terminal_parser_ffi_input_sgr_mouse_plan(
+        _mouseButtonState,
+        gsl::narrow_cast<uint32_t>(sgrEncoding),
+        buttonDown ? 1u : 0u,
+        &plan);
+    THROW_HR_IF(E_UNEXPECTED, status != TERMINAL_PARSER_FFI_OK);
+    if (plan.valid == 0)
     {
-    case CsiActionCodes::MouseDown:
-        // set flag
-        // NOTE: scroll events have buttonFlag = 0
-        //       so this intentionally does nothing
-        buttonState |= buttonFlag;
-        // Check if this mouse down is a double click
-        // and also update our trackers for last clicked position, time and button
+        return false;
+    }
+
+    buttonState = plan.button_state;
+    eventFlags = plan.event_flags;
+
+    if (plan.track_click != 0)
+    {
+        const auto currentTime = std::chrono::steady_clock::now();
         if (_lastMouseClickPos && _lastMouseClickTime && _lastMouseClickButton &&
             uiPos == _lastMouseClickPos &&
             (currentTime - _lastMouseClickTime.value()) < _doubleClickTime &&
-            buttonID == _lastMouseClickButton)
+            plan.button_id == _lastMouseClickButton)
         {
-            // This was a double click, set the flag and reset our trackers
-            // for last clicked position, time and button (this is so we don't send
-            // another double click on a third click)
             eventFlags |= DOUBLE_CLICK;
             _lastMouseClickPos.reset();
             _lastMouseClickTime.reset();
             _lastMouseClickButton.reset();
         }
-        else if (buttonID == CsiMouseButtonCodes::Left ||
-                 buttonID == CsiMouseButtonCodes::Right ||
-                 buttonID == CsiMouseButtonCodes::Middle)
+        else
         {
-            // This was a single click, update our trackers for last
-            // clicked position and time
             _lastMouseClickPos = uiPos;
             _lastMouseClickTime = currentTime;
-            _lastMouseClickButton = buttonID;
+            _lastMouseClickButton = plan.button_id;
         }
-        break;
-    case CsiActionCodes::MouseUp:
-        // clear flag
-        buttonState &= (~buttonFlag);
-        break;
-    default:
-        // no detectable change of state, so we can't update the state
-        return false;
     }
 
-    // Step 3: check if mouse moved
-    if (WI_IsFlagSet(sgrEncoding, CsiMouseModifierCodes::Drag))
-    {
-        eventFlags |= MOUSE_MOVED;
-    }
-
-    // Step 4: update internal state before returning, even if we couldn't fully understand this
-    // only take LOWORD here because HIWORD is reserved for mouse wheel delta and release events for the wheel buttons are not reported
-    _mouseButtonState = LOWORD(buttonState);
-
+    _mouseButtonState = plan.persistent_button_state;
     return true;
 }
 
@@ -1009,16 +798,9 @@ bool InputStateMachineEngine::_UpdateSGRMouseButtonState(const VTID id,
 // true iff we found the key
 bool InputStateMachineEngine::_GetGenericVkey(const GenericKeyIdentifiers identifier, short& vkey) const
 {
-    vkey = 0;
-
-    const auto mapping = std::find(s_genericMap.cbegin(), s_genericMap.cend(), identifier);
-    if (mapping != s_genericMap.end())
-    {
-        vkey = mapping->vkey;
-        return true;
-    }
-
-    return false;
+    const auto mapped = terminal_parser_ffi_input_generic_vkey(static_cast<int32_t>(identifier));
+    vkey = gsl::narrow_cast<short>(mapped);
+    return mapped != 0;
 }
 
 // Method Description:
@@ -1030,37 +812,23 @@ bool InputStateMachineEngine::_GetGenericVkey(const GenericKeyIdentifiers identi
 // true iff we found the key
 bool InputStateMachineEngine::_GetCursorKeysVkey(const VTID id, short& vkey) const
 {
-    vkey = 0;
-
-    const auto mapping = std::find(s_csiMap.cbegin(), s_csiMap.cend(), id);
-    if (mapping != s_csiMap.end())
-    {
-        vkey = mapping->vkey;
-        return true;
-    }
-
-    return false;
+    const auto mapped = terminal_parser_ffi_input_cursor_vkey(gsl::narrow_cast<uint16_t>(id));
+    vkey = gsl::narrow_cast<short>(mapped);
+    return mapped != 0;
 }
 
 // Method Description:
 // - Gets the Vkey from the SS3 codes table associated with a particular character.
 // Arguments:
-// - wch: the wchar_t to get the mapped vkey of.
+// - wch: the wchar_t to get the vkey and modifier state of.
 // - pVkey: Receives the vkey
 // Return Value:
 // true iff we found the key
 bool InputStateMachineEngine::_GetSs3KeysVkey(const wchar_t wch, short& vkey) const
 {
-    vkey = 0;
-
-    const auto mapping = std::find(s_ss3Map.cbegin(), s_ss3Map.cend(), (Ss3ActionCodes)wch);
-    if (mapping != s_ss3Map.end())
-    {
-        vkey = mapping->vkey;
-        return true;
-    }
-
-    return false;
+    const auto mapped = terminal_parser_ffi_input_ss3_vkey(gsl::narrow_cast<uint16_t>(wch));
+    vkey = gsl::narrow_cast<short>(mapped);
+    return mapped != 0;
 }
 
 // Method Description:
@@ -1154,11 +922,35 @@ INPUT_RECORD InputStateMachineEngine::_GenerateWin32Key(const VTParameters& para
     //      Kd: the value of bKeyDown - either a '0' or '1'. If omitted, defaults to '0'.
     //      Cs: the value of dwControlKeyState - any number. If omitted, defaults to '0'.
     //      Rc: the value of wRepeatCount - any number. If omitted, defaults to '1'.
+    uint32_t presentMask = 0;
+    int32_t values[6]{};
+    for (size_t index = 0; index < 6; ++index)
+    {
+        const auto parameter = parameters.at(index);
+        if (parameter.has_value())
+        {
+            presentMask |= 1u << index;
+            values[index] = parameter.value();
+        }
+    }
+
+    terminal_parser_ffi_key_event key{};
+    const auto status = terminal_parser_ffi_input_win32_key_fields(
+        presentMask,
+        values[0],
+        values[1],
+        values[2],
+        values[3],
+        values[4],
+        values[5],
+        &key);
+    THROW_HR_IF(E_UNEXPECTED, status != TERMINAL_PARSER_FFI_OK);
+
     return SynthesizeKeyEvent(
-        parameters.at(3).value_or(0),
-        ::base::saturated_cast<uint16_t>(parameters.at(5).value_or(1)),
-        ::base::saturated_cast<uint16_t>(parameters.at(0).value_or(0)),
-        ::base::saturated_cast<uint16_t>(parameters.at(1).value_or(0)),
-        ::base::saturated_cast<wchar_t>(parameters.at(2).value_or(0)),
-        ::base::saturated_cast<uint32_t>(parameters.at(4).value_or(0)));
+        key.key_down != 0,
+        key.repeat_count,
+        key.virtual_key,
+        key.scan_code,
+        static_cast<wchar_t>(key.unicode_char),
+        key.control_key_state);
 }

@@ -1,0 +1,16 @@
+[package]
+name = "terminal-app-ffi"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+terminal-app = { path = "../terminal-app" }
+
+[lints]
+workspace = true

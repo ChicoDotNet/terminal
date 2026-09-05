@@ -119,7 +119,7 @@ namespace winrt::TerminalApp::implementation
         winrt::Windows::UI::Xaml::Visibility Visibility()
         {
             // Is there no filter, or do we match it?
-            if ((!_pattern || _pattern->terms.empty() || _filteredCommand->Weight() > 0))
+            if ((!_pattern || fzf::matcher::IsEmpty(*_pattern) || _filteredCommand->Weight() > 0))
             {
                 return winrt::Windows::UI::Xaml::Visibility::Visible;
             }

@@ -3,6 +3,31 @@
   <!--
     Contains all the files for the Parser Project.
    -->
+  <PropertyGroup>
+    <_RustParserTargetTriple Condition="'$(Platform)'=='x64'">x86_64-pc-windows-msvc</_RustParserTargetTriple>
+    <_RustParserTargetTriple Condition="'$(Platform)'=='Win32'">i686-pc-windows-msvc</_RustParserTargetTriple>
+    <_RustParserTargetTriple Condition="'$(Platform)'=='ARM64'">aarch64-pc-windows-msvc</_RustParserTargetTriple>
+    <_RustParserCargoProfile Condition="'$(Configuration)'=='Debug'">debug</_RustParserCargoProfile>
+    <_RustParserCargoProfile Condition="'$(Configuration)'!='Debug'">release</_RustParserCargoProfile>
+    <_RustParserCargoReleaseArg Condition="'$(Configuration)'!='Debug'">--release</_RustParserCargoReleaseArg>
+    <_RustParserFfiLib>$(SolutionDir)artifacts\cargo-target\$(_RustParserTargetTriple)\$(_RustParserCargoProfile)\terminal_parser_ffi.lib</_RustParserFfiLib>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(SolutionDir)rust\terminal-parser-ffi\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>$(_RustParserFfiLib);%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Lib>
+      <AdditionalDependencies>$(_RustParserFfiLib);%(AdditionalDependencies)</AdditionalDependencies>
+    </Lib>
+  </ItemDefinitionGroup>
+  <Target Name="BuildRustTerminalParserFfi" BeforeTargets="ClCompile">
+    <Error Condition="'$(_RustParserTargetTriple)'==''" Text="R09 parser Rust integration does not support MSBuild platform '$(Platform)'." />
+    <Exec WorkingDirectory="$(SolutionDir)" Command="rustup target add $(_RustParserTargetTriple)" />
+    <Exec WorkingDirectory="$(SolutionDir)" Command="cargo build --locked -p terminal-parser-ffi --target $(_RustParserTargetTriple) $(_RustParserCargoReleaseArg)" />
+  </Target>
   <ItemGroup>
     <ClCompile Include="..\OutputStateMachineEngine.cpp" />
     <ClCompile Include="..\stateMachine.cpp" />
@@ -10,7 +35,6 @@
     <ClCompile Include="..\precomp.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="..\base64.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ascii.hpp" />

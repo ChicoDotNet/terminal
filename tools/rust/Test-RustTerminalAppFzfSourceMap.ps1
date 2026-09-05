@@ -10,6 +10,7 @@ if ([int]$map.schemaVersion -ne 1 -or [string]$map.stage -ne 'H09-R08-TerminalAp
 }
 
 $blobCount = 0
+$r09OwnershipPromotion = $false
 foreach ($source in @($map.sources)) {
     $sourcePath = [string]$source.sourcePath
     $expectedBlobSha = [string]$source.sourceBlobSha
@@ -27,7 +28,35 @@ foreach ($source in @($map.sources)) {
         throw "Unable to resolve current Git blob for H09 TerminalApp FZF source: $sourcePath"
     }
     if ($actualBlobSha -ne $expectedBlobSha) {
-        throw "H09 TerminalApp FZF source drift requires parity re-audit: ${sourcePath} expected=$expectedBlobSha actual=$actualBlobSha"
+        if ($sourcePath -ne 'src/cascadia/fzf/fzf.cpp') {
+            throw "H09 TerminalApp FZF source drift requires parity re-audit: ${sourcePath} expected=$expectedBlobSha actual=$actualBlobSha"
+        }
+
+        $promotedSource = Get-Content -Raw $sourceFullPath
+        $requiredR09Markers = @(
+            '#include "terminal_app_ffi.h"',
+            'terminal_app_ffi_fzf_pattern_create_utf16',
+            'terminal_app_ffi_fzf_match_utf16',
+            'terminal_app_ffi_fzf_pattern_destroy'
+        )
+        foreach ($marker in $requiredR09Markers) {
+            if (-not $promotedSource.Contains($marker)) {
+                throw "H09 FZF source drift is not a recognized R09 Rust ownership promotion; missing marker: $marker"
+            }
+        }
+
+        $removedCppMatcherMarkers = @(
+            'constexpr int16_t ScoreMatch',
+            'static int32_t fzfFuzzyMatchV2',
+            'static int16_t calculateBonus'
+        )
+        foreach ($marker in $removedCppMatcherMarkers) {
+            if ($promotedSource.Contains($marker)) {
+                throw "H09 R09 ownership promotion still contains duplicate C++ matcher logic: $marker"
+            }
+        }
+
+        $r09OwnershipPromotion = $true
     }
     $blobCount++
 }
@@ -125,4 +154,5 @@ if ($blobCount -ne [int]$map.expected.sourceBlobs -or
     throw "H09 TerminalApp FZF summary changed unexpectedly: sourceMethods=$($sourceMethods.Count) Exact=$($exactEntries.Count) ignored=$($map.expected.ignoredBacklog) blobs=$blobCount witnesses=$($actualTests.Count)"
 }
 
-Write-Host "H09 TerminalApp FZF seam gate passed (source methods=$($sourceMethods.Count), Exact=$($exactEntries.Count), ignored backlog=$($map.expected.ignoredBacklog), Rust witnesses=$($actualTests.Count), pinned source blobs=$blobCount)."
+$ownershipState = if ($r09OwnershipPromotion) { 'R09 Rust ownership promotion verified' } else { 'R08 C++ reference pinned' }
+Write-Host "H09 TerminalApp FZF seam gate passed (source methods=$($sourceMethods.Count), Exact=$($exactEntries.Count), ignored backlog=$($map.expected.ignoredBacklog), Rust witnesses=$($actualTests.Count), tracked source blobs=$blobCount, ownership=$ownershipState)."
